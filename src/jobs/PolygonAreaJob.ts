@@ -1,51 +1,48 @@
-import { Job } from './Job';
-import { Task } from '../models/Task';
-import { area } from '@turf/turf';
-import { Feature, Polygon } from 'geojson';
-
+import { Job } from "./Job";
+import { Task } from "../models/Task";
+import { area } from "@turf/turf";
+import { Feature, Polygon } from "geojson";
 
 export class PolygonAreaJob implements Job {
+  private parseGeoJson(raw: string): Polygon | Feature<Polygon> {
+    try {
+      const parsed = JSON.parse(raw);
 
-    parseGeoJson(geoJson: string): Feature<Polygon> {
-        try {
-            const geometry: Feature<Polygon> = JSON.parse(geoJson);
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Root payload must be an object");
+      }
 
-            if (geometry.type !== 'Feature' || !geometry.geometry) {
-                throw new Error('Invalid GeoJSON: Expected a Feature with geometry');
-            }
+      if (parsed?.type === "Polygon") {
+        return parsed as Polygon;
+      }
 
-            if (geometry.geometry.type !== 'Polygon') {
-                throw new Error(
-                    `Invalid geometry type: Expected 'Polygon', got '${geometry.geometry.type}'`
-                );
-            }
-
-            return geometry;
-        } catch (error: any) {
-            const errorMessage = `Failed to parse GeoJSON: ${error.message}`;
-            console.error(errorMessage);
-            throw new Error(errorMessage);
-        }
+      if (parsed?.type === "Feature") {
+        return parsed as Feature<Polygon>;
+      }
+      throw new Error(
+        `Expected type 'Polygon' or 'Feature', got '${parsed?.type}'`
+      );
+    } catch (error: any) {
+      throw new Error(
+        `Invalid GeoJSON: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
+  }
 
-    calculateArea(geometry: Feature<Polygon>): number {
-        try {
-            return area(geometry);
-        } catch (error: any) {
-            const errorMessage = `Failed to calculate area: ${error.message}`;
-            console.error(errorMessage);
-            throw new Error(errorMessage);
-        }
-    }
+  async run(task: Task): Promise<number> {
+    console.log(`Calculating polygon area for task ${task.taskId}…`);
 
-    async run(task: Task): Promise<{ areaSquareMeters: number }> {
-        console.log(`Calculating polygon area for task ${task.taskId}...`);
-
-        const geometry: Feature<Polygon> = this.parseGeoJson(task.geoJson);
-        const areaSquareMeters = this.calculateArea(geometry);
-
-        console.log(`Successfully calculated polygon area: ${areaSquareMeters} square meters for task ${task.taskId}`);
-
-        return {areaSquareMeters};
-    }
+    const geometry: Polygon | Feature<Polygon> = this.parseGeoJson(
+      task.geoJson
+    );
+    const areaSquareMeters: number = area(geometry);
+    console.log(
+      `[PolygonAreaJob] Area for task ${
+        task.taskId
+      }: ${areaSquareMeters.toFixed(2)} m²`
+    );
+    return areaSquareMeters;
+  }
 }
