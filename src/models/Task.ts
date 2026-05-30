@@ -1,6 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import {
+    Entity,
+    PrimaryGeneratedColumn,
+    Column,
+    ManyToOne,
+    OneToOne,
+    JoinColumn,
+} from 'typeorm';
 import { Workflow } from './Workflow';
-import {TaskStatus} from "../workers/taskRunner";
+import { Result } from './Result';
+import { TaskStatus } from '../workers/taskRunner';
 
 @Entity({ name: 'tasks' })
 export class Task {
@@ -30,4 +38,18 @@ export class Task {
 
     @ManyToOne(() => Workflow, workflow => workflow.tasks)
     workflow!: Workflow;
+
+    @OneToOne(() => Result, { nullable: true, eager: false })
+    @JoinColumn({ name: 'resultId' })
+    result?: Result | null;
+
+    @Column({ nullable: true, type: 'text' })
+    errorMessage?: string | null;
+
+    @Column({ nullable: true, type: 'text' })
+    dependencyId?: string | null;
+
+    @ManyToOne(() => Task, { nullable: true, eager: false })
+    @JoinColumn({ name: 'dependencyId' })
+    dependency?: Task | null;
 }
