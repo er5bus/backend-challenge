@@ -46,6 +46,14 @@ src
 ├─ models/
 │   ├─ world_data.json  # Contains world data for analysis
 │
+├─ errors/
+│   └─ HttpError.ts     # HttpError base class + NotFoundError (404) + BadRequestError (400)
+├─ middleware/
+│   └─ errorHandler.ts              # Centralised Express error-handling middleware
+├─ services/
+│   └─ WorkflowService.ts           # Business logic for workflow
+├─ controllers/
+│   └─ WorkflowController.ts        # Express handlers that delegate to WorkflowService
 ├─ models/
 │   ├─ Result.ts        # Defines the Result entity
 │   ├─ Task.ts          # Defines the Task entity
@@ -57,6 +65,8 @@ src
 │   ├─ TaskRunner.ts    # Handles job execution & task/workflow state transitions
 │   ├─ DataAnalysisJob.ts (example)
 │   ├─ EmailNotificationJob.ts (example)
+│   ├─ PolygonAreaJob.ts # Calculates polygon area in m² using @turf/area
+│   └─ ReportGenerationJob.ts # Aggregates preceding task outputs into a report
 │
 ├─ workflows/
 │   ├─ WorkflowFactory.ts  # Creates workflows & tasks from a YAML definition
@@ -66,6 +76,7 @@ src
 │
 ├─ routes/
 │   ├─ analysisRoutes.ts # POST /analysis endpoint to create workflows
+│   ├─ workflowRoutes.ts # GET /workflow/:id/status and GET /workflow/:id/results
 │
 ├─ data-source.ts       # TypeORM DataSource configuration
 └─ index.ts             # Express.js server initialization & starting the worker
@@ -332,3 +343,205 @@ Implement an API endpoint to retrieve the final results of a completed workflow.
   - Document the API endpoints with request and response examples.
 
 ---
+
+### API Reference
+
+#### POST `/analysis` — Create a workflow
+
+Reads `example_workflow.yml`, creates a 4-step workflow (`polygonArea → analysis → report → notification`)
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:3000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientId": "client123",
+    "geoJson": {
+      "type": "Polygon",
+      "coordinates": [[
+        [-63.624885020050996, -10.311050368263523],
+        [-63.624885020050996, -10.367865108370523],
+        [-63.61278302732815,  -10.367865108370523],
+        [-63.61278302732815,  -10.311050368263523],
+        [-63.624885020050996, -10.311050368263523]
+      ]]
+    }
+  }'
+```
+
+**Response `202`:**
+
+```json
+{
+  "workflowId": "3433c76d-f226-4c91-afb5-7dfc7accab24",
+  "message": "Workflow created and tasks queued from YAML definition."
+}
+```
+
+---
+
+#### GET `/workflow/:id/status` — Workflow status
+
+Returns current execution status and task counts.
+
+**Request:**
+
+```bash
+curl http://localhost:3000/workflow/d1127a3b-507f-4e0c-a537-206d77d5ef34/status
+```
+
+**Response `200`:**
+
+```json
+{
+  "workflowId": "d1127a3b-507f-4e0c-a537-206d77d5ef34",
+  "status": "completed",
+  "completedTasks": 4,
+  "totalTasks": 4
+}
+```
+
+---
+
+#### GET `/workflow/:id/results` — Final results
+
+Returns the aggregated `finalResult` once the workflow has reached a terminal state (`completed` or `failed`).
+
+**Request:**
+
+```bash
+curl http://localhost:3000/workflow/d1127a3b-507f-4e0c-a537-206d77d5ef34/results
+```
+
+**Response `200`:**
+
+```json
+{
+  "workflowId": "d1127a3b-507f-4e0c-a537-206d77d5ef34",
+  "status": "completed",
+  "finalResult": {
+    "tasksCompleted": [
+      {
+        "taskId": "0728bfb7-a471-4c87-88f7-2eddbd7eb531",
+        "taskType": "polygonArea",
+        "output": 8363324.27331557
+      },
+      {
+        "taskId": "7f1235b5-f22b-4462-802a-f66c9a97a6e7",
+        "taskType": "analysis",
+        "output": "Brazil"
+      },
+      {
+        "taskId": "db30badb-1574-46a2-88bc-3d407e8f180b",
+        "taskType": "report",
+        "output": {
+          "workflowId": "d1127a3b-507f-4e0c-a537-206d77d5ef34",
+          "tasks": [
+            {
+              "taskId": "0728bfb7-a471-4c87-88f7-2eddbd7eb531",
+              "taskType": "polygonArea",
+              "output": 8363324.27331557
+            },
+            {
+              "taskId": "7f1235b5-f22b-4462-802a-f66c9a97a6e7",
+              "taskType": "analysis",
+              "output": "Brazil"
+            }
+          ],
+          "finalReport": "Workflow d1127a3b-507f-4e0c-a537-206d77d5ef34 summary: 2 task(s) completed, 0 task(s) failed out of 2 total preceding task(s)."
+        }
+      },
+      {
+        "taskId": "4c7ddde6-a7d5-43f6-a96b-ac5d0771ec42",
+        "taskType": "notification",
+        "output": {}
+      }
+    ],
+    "tasksFailed": []
+  }
+}
+```
+
+---
+
+### Scenarios
+
+#### Scenario Happy path
+
+```bash
+# 1. Create the workflow
+curl -s -X POST http://localhost:3000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientId": "client123",
+    "geoJson": {
+      "type": "Polygon",
+      "coordinates": [[
+        [-63.624885020050996, -10.311050368263523],
+        [-63.624885020050996, -10.367865108370523],
+        [-63.61278302732815,  -10.367865108370523],
+        [-63.61278302732815,  -10.311050368263523],
+        [-63.624885020050996, -10.311050368263523]
+      ]]
+    }
+  }'
+# → { "workflowId": "<ID>", ... }
+
+# 2. Poll status every 5s until "completed"
+curl http://localhost:3000/workflow/<ID>/status
+# → { "status": "completed", "completedTasks": 3, "totalTasks": 3 }
+
+# 3. Fetch final results
+curl http://localhost:3000/workflow/<ID>/results
+# → finalResult.tasksCompleted contains polygonArea (~8 363 324 m²), analysis ("Brazil"), and report
+```
+
+---
+
+#### Scenario Failure
+
+When `polygonArea` fails (invalid input) `analysis` is automatically cascade-marked `failed`. The `report` task is **excluded from the cascade** and always runs producing `notification` because it runs after sucessfull run on report.
+
+```bash
+curl -s -X POST http://localhost:3000/analysis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientId": "client-bad",
+    "geoJson": { "type": "NotAValidType", "coordinates": "wrong" }
+  }'
+# → { "workflowId": "<ID>", ... }
+```
+
+After the workflow reaches `failed`:
+
+```bash
+curl http://localhost:3000/workflow/<ID>/results
+```
+
+```json
+{
+  "status": "failed",
+  "finalResult": {
+    "tasksCompleted": [
+      {
+        "taskId": "…",
+        "taskType": "report",
+        "output": { "finalReport": "… 0 completed, 2 failed …" }
+      }
+    ],
+    "tasksFailed": [
+      {
+        "taskId": "…",
+        "taskType": "polygonArea",
+        "errorMessage": "Invalid GeoJSON: …"
+      },
+      {
+        "taskId": "…",
+        "taskType": "analysis",
+        "errorMessage": "Skipped: dependency … failed"
+      }
+    ]
+  }
+}
+```
