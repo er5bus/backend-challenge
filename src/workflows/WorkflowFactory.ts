@@ -15,6 +15,7 @@ export enum WorkflowStatus {
 interface WorkflowStep {
     taskType: string;
     stepNumber: number;
+    dependsOn?: number;
 }
 
 interface WorkflowDefinition {
@@ -55,7 +56,31 @@ export class WorkflowFactory {
             return task;
         });
 
-        await taskRepository.save(tasks);
+        const savedTasks = await taskRepository.save(tasks);
+
+        const stepToTask = new Map<number, Task>();
+        workflowDef.steps.forEach((step, idx) => {
+            stepToTask.set(step.stepNumber, savedTasks[idx]);
+        });
+
+        const tasksNeedingUpdate: Task[] = [];
+        workflowDef.steps.forEach((step, idx) => {
+            if (step.dependsOn !== undefined) {
+                const depTask = stepToTask.get(step.dependsOn);
+                if (!depTask) {
+                    throw new Error(
+                        `Workflow step ${step.stepNumber} references unknown dependsOn: ${step.dependsOn}`,
+                    );
+                }
+                savedTasks[idx].dependency   = depTask;
+                savedTasks[idx].dependencyId = depTask.taskId;
+                tasksNeedingUpdate.push(savedTasks[idx]);
+            }
+        });
+
+        if (tasksNeedingUpdate.length > 0) {
+            await taskRepository.save(tasksNeedingUpdate);
+        }
 
         return savedWorkflow;
     }
